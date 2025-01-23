@@ -19,10 +19,12 @@ IncidenceMatrix loadMatrixFromJSON(const string& filename, vector<int>& initialM
     return matrix;
 }
 
-void saveMatrixToJSON(const IncidenceMatrix& matrix, const vector<int>& marking, const string& filename) {
+void saveMatrixToJSON(const IncidenceMatrix& matrix, const vector<string>& placeNames,
+                      const vector<string>& transitionNames, const string& filename) {
     json j;
     j["matrix"] = matrix;
-    j["marking"] = marking;
+    j["Place"] = placeNames;
+    j["Transition"] = transitionNames;
     ofstream file(filename);
     file << j.dump(4);
 }
@@ -44,12 +46,25 @@ vector<int> fireTransition(const vector<int>& marking, const vector<int>& transi
     return newMarking;
 }
 
-pair<IncidenceMatrix, vector<int>> unfolding(const IncidenceMatrix& inputMatrix, const vector<int>& initialMarking) {
+pair<IncidenceMatrix, pair<vector<string>, vector<string>>> unfolding(
+    const IncidenceMatrix& inputMatrix, const vector<int>& initialMarking) {
     IncidenceMatrix outputMatrix = inputMatrix;
-    vector<int> extendedMarking(initialMarking.size(), 0);
+    vector<string> placeNames;
+    vector<string> transitionNames;
+
     set<vector<int>> visitedMarkings;
+    map<vector<int>, int> markingToRow;
     vector<vector<int>> queue = {initialMarking};
+    map<vector<int>, int> duplicateCounter;
+
     visitedMarkings.insert(initialMarking);
+    for (size_t i = 0; i < initialMarking.size(); ++i) {
+        placeNames.push_back("p" + to_string(i + 1));
+    }
+
+    for (size_t t = 0; t < inputMatrix[0].size(); ++t) {
+        transitionNames.push_back("t" + to_string(t + 1));
+    }
 
     while (!queue.empty()) {
         vector<int> currentMarking = queue.back();
@@ -64,19 +79,34 @@ pair<IncidenceMatrix, vector<int>> unfolding(const IncidenceMatrix& inputMatrix,
             if (isTransitionEnabled(currentMarking, transition)) {
                 vector<int> newMarking = fireTransition(currentMarking, transition);
 
-                if (visitedMarkings.find(newMarking) == visitedMarkings.end()) {
-                    visitedMarkings.insert(newMarking);
-                    queue.push_back(newMarking);
+                if (visitedMarkings.find(newMarking) != visitedMarkings.end()) {
+                    // Duplicate place handling
+                    int duplicateCount = ++duplicateCounter[newMarking];
+                    string duplicatePlace =
+                        "p" + to_string(markingToRow[newMarking] + 1) + "(" + to_string(duplicateCount) + ")";
+                    placeNames.push_back(duplicatePlace);
+
                     vector<int> newRow(inputMatrix[0].size(), 0);
                     newRow[t] = 1;
                     outputMatrix.push_back(newRow);
-                    extendedMarking.push_back(0);
+                    continue;
                 }
+
+                visitedMarkings.insert(newMarking);
+                queue.push_back(newMarking);
+
+                markingToRow[newMarking] = outputMatrix.size();
+                string newPlace = "p" + to_string(outputMatrix.size() + 1);
+                placeNames.push_back(newPlace);
+
+                vector<int> newRow(inputMatrix[0].size(), 0);
+                newRow[t] = 1;
+                outputMatrix.push_back(newRow);
             }
         }
     }
 
-    return {outputMatrix, extendedMarking};
+    return {outputMatrix, {placeNames, transitionNames}};
 }
 
 int main() {
@@ -86,31 +116,12 @@ int main() {
     vector<int> initialMarking;
     IncidenceMatrix inputMatrix = loadMatrixFromJSON(inputFile, initialMarking);
 
-    cout << "Odczytana macierz wejściowa:\n";
-    for (const auto& row : inputMatrix) {
-        for (int val : row) {
-            cout << val << " ";
-        }
-        cout << endl;
-    }
+    auto [resultMatrix, mappings] = unfolding(inputMatrix, initialMarking);
+    auto [placeNames, transitionNames] = mappings;
 
-    cout << "Odczytany początkowy marking:\n";
-    for (int val : initialMarking) {
-        cout << val << " ";
-    }
-    cout << endl;
+    saveMatrixToJSON(resultMatrix, placeNames, transitionNames, outputFile);
 
-    auto [resultMatrix, resultMarking] = unfolding(inputMatrix, initialMarking);
-
-    saveMatrixToJSON(resultMatrix, resultMarking, outputFile);
-
-    cout << "Macierz wynikowa unfolding zapisana do pliku " << outputFile << ":\n";
-    for (const auto& row : resultMatrix) {
-        for (int val : row) {
-            cout << val << " ";
-        }
-        cout << endl;
-    }
+    cout << "Macierz wynikowa unfolding zapisana do pliku " << outputFile << endl;
 
     return 0;
 }
