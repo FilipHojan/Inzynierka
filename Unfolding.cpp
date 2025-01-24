@@ -2,12 +2,12 @@
 #include <fstream>
 #include <vector>
 #include <string>
-#include <set>
 #include <map>
+#include <set>
 #include "nlohmann/json.hpp"
 
-using json = nlohmann::json;
 using namespace std;
+using json = nlohmann::json;
 
 using Matrix = vector<vector<int>>;
 using Marking = vector<int>;
@@ -28,12 +28,16 @@ PetriNet loadFromJSON(const string& filename) {
     net.incidenceMatrix = j["matrix"].get<Matrix>();
     net.initialMarking = j["initialMarking"].get<Marking>();
 
-    for (int i = 1; i <= net.incidenceMatrix.size(); ++i) {
+    int placeCount = net.incidenceMatrix.size();
+    int transitionCount = net.incidenceMatrix[0].size();
+
+    for (int i = 1; i <= placeCount; ++i) {
         net.places.push_back("p" + to_string(i));
     }
-    for (int i = 1; i <= net.incidenceMatrix[0].size(); ++i) {
+    for (int i = 1; i <= transitionCount; ++i) {
         net.transitions.push_back("t" + to_string(i));
     }
+
     return net;
 }
 
@@ -64,46 +68,24 @@ Marking fireTransition(const Marking& marking, const vector<int>& transition) {
     return newMarking;
 }
 
-void addPlace(Matrix& matrix, vector<string>& places, const string& placeName) {
-    places.push_back(placeName);
-    vector<int> newRow(matrix[0].size(), 0); // Dodaj nowy wiersz z zerami
+void addPlace(Matrix& matrix, vector<string>& places, const string& placeName, const vector<int>& transition, size_t transitionIndex) {
+    vector<int> newRow(matrix[0].size(), 0);
+    newRow[transitionIndex] = transition[transitionIndex];
     matrix.push_back(newRow);
+    places.push_back(placeName);
 }
 
-void addTransition(Matrix& matrix, vector<string>& transitions, const string& transitionName) {
-    transitions.push_back(transitionName);
+void addTransition(Matrix& matrix, vector<string>& transitions, const string& transitionName, const vector<int>& places, size_t placeIndex) {
     for (auto& row : matrix) {
-        row.push_back(0); // Dodaj nową kolumnę z zerami
+        row.push_back(0);
     }
+    matrix[placeIndex].back() = places[placeIndex];
+    transitions.push_back(transitionName);
 }
 
-void updateMatrixForTransition(Matrix& matrix, const vector<string>& places, const vector<string>& transitions,
-                               const string& fromPlace, const string& toTransition, const string& toPlace) {
-    // Znajdź indeksy miejsca i tranzycji
-    int fromPlaceIndex = -1, toTransitionIndex = -1, toPlaceIndex = -1;
-    for (size_t i = 0; i < places.size(); ++i) {
-        if (places[i] == fromPlace) fromPlaceIndex = i;
-        if (places[i] == toPlace) toPlaceIndex = i;
-    }
-    for (size_t j = 0; j < transitions.size(); ++j) {
-        if (transitions[j] == toTransition) toTransitionIndex = j;
-    }
-
-    // Zaktualizuj macierz
-    if (fromPlaceIndex != -1 && toTransitionIndex != -1) {
-        matrix[fromPlaceIndex][toTransitionIndex] = -1; // Z miejsca do tranzycji
-    }
-    if (toPlaceIndex != -1 && toTransitionIndex != -1) {
-        matrix[toPlaceIndex][toTransitionIndex] = 1; // Z tranzycji do miejsca
-    }
-}
-
-void unfoldRecursively(const PetriNet& net, Marking currentMarking, set<Marking>& visitedMarkings,
+void unfoldRecursively(const PetriNet& net, const Marking& currentMarking, vector<Marking>& markingHistory,
                        Matrix& resultMatrix, vector<string>& resultPlaces, vector<string>& resultTransitions,
-                       map<string, int>& duplicateCounts, vector<Marking>& markingHistory) {
-    visitedMarkings.insert(currentMarking);
-    markingHistory.push_back(currentMarking);
-
+                       map<string, int>& duplicateCounts) {
     for (size_t t = 0; t < net.transitions.size(); ++t) {
         vector<int> transition;
         for (size_t p = 0; p < net.places.size(); ++p) {
@@ -113,63 +95,63 @@ void unfoldRecursively(const PetriNet& net, Marking currentMarking, set<Marking>
         if (isTransitionEnabled(currentMarking, transition)) {
             Marking newMarking = fireTransition(currentMarking, transition);
 
-            string transitionName = net.transitions[t];
-            if (visitedMarkings.find(newMarking) != visitedMarkings.end()) {
-                // Obsługa cyklu: dodaj duplikaty miejsc
+            bool foundDuplicate = false;
+            for (auto& previousMarking : markingHistory) {
+                if (previousMarking == newMarking) {
+                    foundDuplicate = true;
+                    break;
+                }
+            }
+
+            if (foundDuplicate) {
                 for (size_t p = 0; p < net.places.size(); ++p) {
                     if (newMarking[p] > 0) {
                         string placeName = net.places[p];
                         int count = ++duplicateCounts[placeName];
-                        string duplicatePlace = placeName + "(" + to_string(count) + ")";
-                        addPlace(resultMatrix, resultPlaces, duplicatePlace);
-                        updateMatrixForTransition(resultMatrix, resultPlaces, resultTransitions, placeName, transitionName, duplicatePlace);
+                        addPlace(resultMatrix, resultPlaces, placeName + "(" + to_string(count) + ")", transition, t);
                     }
                 }
+                addTransition(resultMatrix, resultTransitions, net.transitions[t] + "(" + to_string(duplicateCounts[net.transitions[t]]) + ")", transition, t);
             } else {
-                visitedMarkings.insert(newMarking);
                 markingHistory.push_back(newMarking);
 
-                // Dodaj miejsca i przejścia
                 for (size_t p = 0; p < net.places.size(); ++p) {
-                    if (newMarking[p] > 0) {
-                        addPlace(resultMatrix, resultPlaces, net.places[p]);
-                        updateMatrixForTransition(resultMatrix, resultPlaces, resultTransitions, net.places[p], transitionName, net.places[p]);
+                    if (newMarking[p] > 0 && find(resultPlaces.begin(), resultPlaces.end(), net.places[p]) == resultPlaces.end()) {
+                        addPlace(resultMatrix, resultPlaces, net.places[p], transition, t);
                     }
                 }
 
-                addTransition(resultMatrix, resultTransitions, transitionName);
-                unfoldRecursively(net, newMarking, visitedMarkings, resultMatrix, resultPlaces, resultTransitions, duplicateCounts, markingHistory);
+                if (find(resultTransitions.begin(), resultTransitions.end(), net.transitions[t]) == resultTransitions.end()) {
+                    addTransition(resultMatrix, resultTransitions, net.transitions[t], transition, t);
+                }
+
+                unfoldRecursively(net, newMarking, markingHistory, resultMatrix, resultPlaces, resultTransitions, duplicateCounts);
             }
         }
     }
-
-    markingHistory.pop_back();
-    visitedMarkings.erase(currentMarking);
 }
 
-void unfoldPetriNet(const PetriNet& net, Matrix& resultMatrix, vector<string>& resultPlaces, vector<string>& resultTransitions) {
-    set<Marking> visitedMarkings;
+pair<Matrix, pair<vector<string>, vector<string>>> unfolding(const PetriNet& net) {
+    Matrix resultMatrix(net.places.size(), vector<int>(net.transitions.size(), 0));
+    vector<string> resultPlaces = net.places;
+    vector<string> resultTransitions = net.transitions;
+
+    vector<Marking> markingHistory = {net.initialMarking};
     map<string, int> duplicateCounts;
-    vector<Marking> markingHistory;
 
-    resultMatrix.assign(net.places.size(), vector<int>(net.transitions.size(), 0));
-    resultPlaces = net.places;
-    resultTransitions = net.transitions;
+    unfoldRecursively(net, net.initialMarking, markingHistory, resultMatrix, resultPlaces, resultTransitions, duplicateCounts);
 
-    unfoldRecursively(net, net.initialMarking, visitedMarkings, resultMatrix, resultPlaces, resultTransitions, duplicateCounts, markingHistory);
+    return {resultMatrix, {resultPlaces, resultTransitions}};
 }
 
 int main() {
-    string inputFile = "input_matrix.json";
-    string outputFile = "output_matrix.json";
+    string inputFile = "input.json";
+    string outputFile = "output.json";
 
     PetriNet net = loadFromJSON(inputFile);
 
-    Matrix resultMatrix;
-    vector<string> resultPlaces;
-    vector<string> resultTransitions;
-
-    unfoldPetriNet(net, resultMatrix, resultPlaces, resultTransitions);
+    auto [resultMatrix, mappings] = unfolding(net);
+    auto [resultPlaces, resultTransitions] = mappings;
 
     saveToJSON(outputFile, resultMatrix, resultPlaces, resultTransitions);
 
