@@ -180,6 +180,8 @@ void unfoldRecursively(const PetriNet& net, const Marking& currentMarking, vecto
                 visitedTransitions[t] = true; // Oznaczamy to przejście jako "zamknięte".
                 continue;
 
+                
+
             } else { // Jeśli nie znaleziono duplikatu, dodaje nowe węzły.
 
                 if (!markingHistory.empty()) {
