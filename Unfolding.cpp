@@ -151,6 +151,8 @@ void addTransitionColumn_CYCLE(Matrix& matrix, const Marking& newMarking, const 
 
 
 void unfoldRecursively(const PetriNet& net, const Marking& currentMarking, vector<Marking>& markingHistory, Matrix& resultMatrix, vector<string>& resultPlaces, vector<string>& resultTransitions, map<string, int>& duplicateCounts, size_t currentTransition = 0) {
+    vector<bool> visitedTransitions(net.transitions.size(), false); // Śledzenie odwiedzonych przejść dla danego oznakowania.
+    
     for (size_t t = currentTransition; t < net.transitions.size(); ++t) { // Rozpoczynamy od `currentTransition`
         vector<int> transition;
         for (size_t p = 0; p < net.places.size(); ++p) {
@@ -171,7 +173,15 @@ void unfoldRecursively(const PetriNet& net, const Marking& currentMarking, vecto
             if (foundDuplicate) {
                 addTransitionColumn_CYCLE(resultMatrix, newMarking, markingHistory, t);
 
+                // Cofamy się – ustawiamy `newMarking` na ostatni element historii.
+                newMarking = markingHistory.back();
+
+                // Oznaczamy to przejście jako "zamknięte".
+                visitedTransitions[t] = true; // Oznaczamy to przejście jako "zamknięte".
                 continue;
+
+                
+
             } else { // Jeśli nie znaleziono duplikatu, dodaje nowe węzły.
 
                 if (!markingHistory.empty()) {
