@@ -31,27 +31,53 @@ PetriNet loadFromJSON(const string& filename) {
     int placeCount = net.incidenceMatrix.size(); // Liczba miejsc (wiersze macierzy).
     int transitionCount = net.incidenceMatrix[0].size(); // Liczba przejść (kolumny macierzy).
 
-    // Generuje nazwy miejsc w formacie p1, p2, ...
-    for (int i = 1; i <= placeCount; ++i) {
-        net.places.push_back("p" + to_string(i));
-    }
-
-    // Generuje nazwy przejść w formacie t1, t2, ...
-    for (int i = 1; i <= transitionCount; ++i) {
-        net.transitions.push_back("t" + to_string(i));
-    }
+    // Dodajemy puste miejsca i przejścia na podstawie rozmiaru
+    net.places.resize(placeCount);       // Rezerwujemy miejsce dla miejsc.
+    net.transitions.resize(transitionCount); // Rezerwujemy miejsce dla przejść.
 
     return net; // Zwraca wczytaną sieć Petriego.
 }
 
-void saveToJSON(const string& filename, const Matrix& matrix, const vector<string>& places, const vector<string>& transitions) {
+//Nakładanie starego i nowe oznakowania
+vector<int> generateFinalMarking(const Matrix& resultMatrix, const Marking& initialMarking) {
+    size_t rowCount = resultMatrix.size(); // Liczba wierszy w macierzy wynikowej
+    vector<int> finalMarking(rowCount, 0); // Tworzymy wektor wypełniony zerami
+
+    // Przepisujemy początkowe oznakowanie
+    for (size_t i = 0; i < initialMarking.size(); ++i) {
+        if (i < rowCount) {
+            finalMarking[i] = initialMarking[i]; // Nakładamy początkowe oznakowanie
+        }
+    }
+
+    return finalMarking; // Zwracamy końcowe oznakowanie
+}
+
+
+void saveToJSON(const string& filename, const Matrix& matrix, const vector<string>& places, const vector<string>& transitions, const vector<int>& marking) {
     json j;                       // Tworzy obiekt JSON.
-    j["matrix"] = matrix;         // Dodaje macierz do obiektu JSON.
     j["Place"] = places;          // Dodaje miejsca do obiektu JSON.
     j["Transition"] = transitions; // Dodaje przejścia do obiektu JSON.
+    j["matrix"] = matrix;         // Dodaje macierz do obiektu JSON.
+    j["Marking"] = marking;       // Dodaje oznakowanie do obiektu JSON.
+
 
     ofstream file(filename);      // Otwiera plik JSON do zapisu.
     file << j.dump(4);            // Zapisuje dane w formacie JSON z wcięciem 4 spacji.
+}
+
+// Dodanie nowych miejsc do listy miejsc
+void addPlace(vector<string>& resultPlaces, const string& placeName) {
+    if (find(resultPlaces.begin(), resultPlaces.end(), placeName) == resultPlaces.end()) {
+        resultPlaces.push_back(placeName); // Dodaj nazwę miejsca, jeśli jeszcze jej nie ma.
+    }
+}
+
+// Dodanie nowych przejść do listy przejść
+void addTransition(vector<string>& resultTransitions, const string& transitionName) {
+    if (find(resultTransitions.begin(), resultTransitions.end(), transitionName) == resultTransitions.end()) {
+        resultTransitions.push_back(transitionName); // Dodaj nazwę przejścia, jeśli jeszcze jej nie ma.
+    }
 }
 
 // Sprawdzenie czy moze zostac uruchomiona tranzycja
@@ -82,7 +108,7 @@ Marking fireTransition(const Marking& marking, const vector<int>& transition) {
 
 
 // Dodawanie wypelnionych kolumn nowej macierzy
-void addTransitionColumn(Matrix& matrix, const Marking& newMarking, const vector<Marking>& historyMarking, size_t transitionIndex) {
+void addTransitionColumn(Matrix& matrix, const Marking& newMarking, const vector<Marking>& historyMarking, size_t transitionIndex, vector<string>& resultTransitions) {
     // Pobierz ostatnie oznakowanie z historii jako "previousMarking"
     const Marking& previousMarking = historyMarking.back();
 
@@ -103,10 +129,15 @@ void addTransitionColumn(Matrix& matrix, const Marking& newMarking, const vector
             matrix[i].push_back(newColumn[i]);
         }
     }
+
+
+    // Dodanie nazwy przejścia
+    addTransition(resultTransitions, "t" + to_string(transitionIndex + 1));
+
 }
 
 // Dodawanie wypełnionych kolumny w nowej macierzy wraz z dodaniem nowych wierszy ze wzgledu na duplikaty
-void addTransitionColumn_CYCLE(Matrix& matrix, const Marking& newMarking, const vector<Marking>& historyMarking, size_t transitionIndex) {
+void addTransitionColumn_CYCLE(Matrix& matrix, const Marking& newMarking, const vector<Marking>& historyMarking, size_t transitionIndex, vector<string>& resultTransitions, vector<string>& resultPlaces, map<string, int>& duplicateCounts) {
     // Pobierz ostatnie oznakowanie z historii jako "previousMarking"
     const Marking& previousMarking = historyMarking.back();
 
@@ -127,6 +158,9 @@ void addTransitionColumn_CYCLE(Matrix& matrix, const Marking& newMarking, const 
         }
     }
 
+    // Dodanie nazwy przejścia
+    addTransition(resultTransitions, "t" + to_string(transitionIndex + 1));
+
     // Sprawdzanie liczb dodatnich w newColumn
     for (size_t i = 0; i < newColumn.size(); ++i) {
         if (newColumn[i] > 0) { // Znaleziono liczbę dodatnią
@@ -143,6 +177,12 @@ void addTransitionColumn_CYCLE(Matrix& matrix, const Marking& newMarking, const 
 
             // Dodajemy nowy wiersz do macierzy
             matrix.push_back(newRow);
+
+            // Dodajemy nazwę miejsca z duplikatem do resultPlaces
+            string originalPlace = "p" + to_string(i + 1); // Pierwotne miejsce, np. "p1"
+            int duplicateIndex = ++duplicateCounts[originalPlace]; // Aktualizujemy licznik duplikatów
+            string newPlaceName = originalPlace + "(" + to_string(duplicateIndex) + ")";
+            resultPlaces.push_back(newPlaceName); // Dodajemy nową nazwę miejsca
         }
     }
 }
@@ -150,67 +190,102 @@ void addTransitionColumn_CYCLE(Matrix& matrix, const Marking& newMarking, const 
 
 
 
-void unfoldRecursively(const PetriNet& net, const Marking& currentMarking, vector<Marking>& markingHistory, Matrix& resultMatrix, vector<string>& resultPlaces, vector<string>& resultTransitions, map<string, int>& duplicateCounts, size_t currentTransition = 0) {
-    vector<bool> visitedTransitions(net.transitions.size(), false); // Śledzenie odwiedzonych przejść dla danego oznakowania.
-    
-    for (size_t t = currentTransition; t < net.transitions.size(); ++t) { // Rozpoczynamy od `currentTransition`
+void unfoldRecursively(const PetriNet& net, const Marking& currentMarking, vector<Marking>& markingHistory, Matrix& resultMatrix, vector<string>& resultPlaces, vector<string>& resultTransitions, map<string, int>& duplicateCounts, vector<bool>& visitedTransitions, size_t currentTransition = 0) {
+    cout << "currentTransition: " << currentTransition << endl;
+    cout << "net.transitions.size(): " << net.transitions.size() << endl;
+
+    bool hasActiveTransitions = false;
+
+    for (; currentTransition < net.incidenceMatrix[0].size(); ++currentTransition) {
         vector<int> transition;
         for (size_t p = 0; p < net.places.size(); ++p) {
-            transition.push_back(net.incidenceMatrix[p][t]); // Pobiera kolumnę macierzy dla danego przejścia.
+            transition.push_back(net.incidenceMatrix[p][currentTransition]);
         }
 
-        if (isTransitionEnabled(currentMarking, transition)) { // Sprawdza, czy przejście jest aktywne.
-            Marking newMarking = fireTransition(currentMarking, transition); // Wykonuje przejście.
+        if (isTransitionEnabled(currentMarking, transition)) {
+            hasActiveTransitions = true;
 
-            bool foundDuplicate = false;
-            for (auto& previousMarking : markingHistory) {
-                if (previousMarking == newMarking) {
-                    foundDuplicate = true; // Sprawdza, czy oznakowanie już istnieje.
-                    break;
-                }
-            }
+            if (!visitedTransitions[currentTransition]) { // ✅ Teraz używasz prawidłowej zmiennej!
+                Marking newMarking = fireTransition(currentMarking, transition);
+                bool foundDuplicate = false;
 
-            if (foundDuplicate) {
-                addTransitionColumn_CYCLE(resultMatrix, newMarking, markingHistory, t);
-
-                // Cofamy się – ustawiamy `newMarking` na ostatni element historii.
-                newMarking = markingHistory.back();
-
-                // Oznaczamy to przejście jako "zamknięte".
-                visitedTransitions[t] = true; // Oznaczamy to przejście jako "zamknięte".
-                continue;
-
-                
-
-            } else { // Jeśli nie znaleziono duplikatu, dodaje nowe węzły.
-
-                if (!markingHistory.empty()) {
-                    // Dodanie nowej kolumny do macierzy na podstawie różnicy newMarking i ostatniego historyMarking
-                    addTransitionColumn(resultMatrix, newMarking, markingHistory, t);
+                for (const auto& previousMarking : markingHistory) {
+                    if (previousMarking == newMarking) {
+                        foundDuplicate = true;
+                        break;
+                    }
                 }
 
-                // Dodanie newMarking do historii oznakowań
-                markingHistory.push_back(newMarking);
-
-                // Wywołanie rekurencyjne rozpoczynające się od następnego przejścia
-                unfoldRecursively(net, newMarking, markingHistory, resultMatrix, resultPlaces, resultTransitions, duplicateCounts, t + 1);
+                if (foundDuplicate) {
+                    addTransitionColumn_CYCLE(resultMatrix, newMarking, markingHistory, currentTransition, resultTransitions, resultPlaces, duplicateCounts);
+                    newMarking = markingHistory.back();
+                    visitedTransitions[currentTransition] = true;
+                    markingHistory.pop_back();
+                    unfoldRecursively(net, newMarking, markingHistory, resultMatrix, resultPlaces, resultTransitions, duplicateCounts, visitedTransitions, currentTransition - 1);
+                    return;
+                } else {
+                    if (!markingHistory.empty()) {
+                        addTransitionColumn(resultMatrix, newMarking, markingHistory, currentTransition, resultTransitions);
+                    }
+                    markingHistory.push_back(newMarking);
+                    visitedTransitions[currentTransition] = true;
+                    unfoldRecursively(net, newMarking, markingHistory, resultMatrix, resultPlaces, resultTransitions, duplicateCounts, visitedTransitions, currentTransition + 1);
+                    return;
+                }
             }
         }
     }
+
+    // 📌 Nowa poprawiona logika cofania się
+    while (!markingHistory.empty()) {
+        Marking newMarking = markingHistory.back();
+        markingHistory.pop_back();
+
+        bool foundNewPath = false;
+        for (size_t t = 0; t < net.incidenceMatrix[0].size(); ++t) {
+            if (!visitedTransitions[t]) { // Szukamy nieodwiedzonych przejść
+                vector<int> transition;
+                for (size_t p = 0; p < net.places.size(); ++p) {
+                    transition.push_back(net.incidenceMatrix[p][t]);
+                }
+
+                if (isTransitionEnabled(newMarking, transition)) { 
+                    // Znaleźliśmy aktywne i nieodwiedzone przejście!
+                    unfoldRecursively(net, newMarking, markingHistory, resultMatrix, resultPlaces, resultTransitions, duplicateCounts, visitedTransitions, t);
+                    return; // Restartujemy rekurencję
+                }
+            }
+        }
+        // Jeśli nie znaleźliśmy nowej ścieżki, kontynuujemy cofanie
+    }
+
+    return; // Jeśli dotarliśmy do początku historii, kończymy rekurencję
 }
 
-pair<Matrix, pair<vector<string>, vector<string>>> unfolding(const PetriNet& net) {
-    Matrix resultMatrix; // Początkowo pusta macierz wynikowa.
-    vector<string> resultPlaces; // Początkowo pusta lista miejsc.
-    vector<string> resultTransitions; // Początkowo pusta lista przejść.
 
-    vector<Marking> markingHistory = {net.initialMarking}; // Historia oznakowań z początkowym oznakowaniem.
-    map<string, int> duplicateCounts; // Licznik duplikatów dla miejsc i przejść.
 
-    unfoldRecursively(net, net.initialMarking, markingHistory, resultMatrix, resultPlaces, resultTransitions, duplicateCounts);
 
-    return {resultMatrix, {resultPlaces, resultTransitions}}; // Zwraca macierz wynikową i odpowiadające listy.
+tuple<Matrix, vector<string>, vector<string>, vector<int>> unfolding(const PetriNet& net) {
+    Matrix resultMatrix; 
+    vector<string> resultPlaces; 
+    vector<string> resultTransitions;
+    
+    vector<bool> visitedTransitions(net.incidenceMatrix[0].size(), false); // Prawidłowa inicjalizacja
+
+    vector<Marking> markingHistory = {net.initialMarking}; 
+    map<string, int> duplicateCounts; 
+
+    for (size_t i = 0; i < net.initialMarking.size(); ++i) {
+        addPlace(resultPlaces, "p" + to_string(i + 1));
+    }
+
+    unfoldRecursively(net, net.initialMarking, markingHistory, resultMatrix, resultPlaces, resultTransitions, duplicateCounts, visitedTransitions);
+
+    vector<int> finalMarking = generateFinalMarking(resultMatrix, net.initialMarking);
+
+    return {resultMatrix, resultPlaces, resultTransitions, finalMarking};
 }
+
 
 int main() {
     string inputFile = "input.json"; // Plik wejściowy JSON.
@@ -218,10 +293,11 @@ int main() {
 
     PetriNet net = loadFromJSON(inputFile); // Wczytuje sieć Petriego z pliku.
 
-    auto [resultMatrix, mappings] = unfolding(net); // Przeprowadza unfolding i otrzymuje wynikową macierz i mapowania.
-    auto [resultPlaces, resultTransitions] = mappings; // Rozpakowuje mapowania miejsc i przejść.
+    // Rozpakowanie wyniku funkcji `unfolding`
+    auto [resultMatrix, resultPlaces, resultTransitions, finalMarking] = unfolding(net);
 
-    saveToJSON(outputFile, resultMatrix, resultPlaces, resultTransitions); // Zapisuje wynik do pliku JSON.
+    // Zapisanie wyniku do pliku JSON
+    saveToJSON(outputFile, resultMatrix, resultPlaces, resultTransitions, finalMarking);
 
     cout << "Algorytm unfolding zakończony. Wynik zapisano do pliku " << outputFile << endl;
 
