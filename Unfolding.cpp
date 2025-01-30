@@ -23,53 +23,78 @@ struct PetriNet {
 string numberColumnException = "";
 string numberRowException = "";
 
+// Zmienne globalne na nazwy duplikatów
+string duplicatedPlaceName = "";
+string duplicatedTransitionName = "";
+
 //Duplikat przechodni
 void Exception(Matrix& matrix, Marking& newMarking, vector<string>& resultPlaces, vector<string>& resultTransitions, map<string, int>& duplicateCounts, vector<bool>& visitedTransitions, size_t transitionIndex) {
     size_t numPlaces = matrix.size();
     size_t numTransitions = matrix[0].size();
 
-    // Znalezienie miejsca, które generuje duplikat
+    // Zmienna do przechowania wartości dodatniej i jej indeksu
+    int transfer_connect = 0;
+    size_t duplicatedPlaceIndex = 0;
+
+    // ---- Znalezienie miejsca z liczbą dodatnią ----
     for (size_t p = 0; p < numPlaces; ++p) {
         if (matrix[p][transitionIndex] > 0) {
-            int transfer_connect = matrix[p][transitionIndex];
-            matrix[p][transitionIndex] = 0;
+            transfer_connect = matrix[p][transitionIndex];
+            matrix[p][transitionIndex] = 0;  // Wyzerowanie przepływu w macierzy
+            duplicatedPlaceIndex = p;
 
-            // Dodanie nowego wiersza (duplikat miejsca)
+            // ---- Dodanie nowego wiersza ----
             vector<int> newRow(numTransitions, 0);
             newRow[transitionIndex] = transfer_connect;
-            matrix.push_back(newRow);
+            matrix.push_back(newRow);  // Nowy wiersz w macierzy
 
-            // Aktualizacja oznakowania
-            newMarking[p] = 0;
-            newMarking.push_back(transfer_connect);
-
-            // Aktualizacja nazw miejsc
+            // ---- Tworzenie nazwy duplikatu miejsca ----
             string originalPlace = "p" + to_string(p + 1);
             int duplicateIndex = ++duplicateCounts[originalPlace];
-            string newPlaceName = originalPlace + "(" + to_string(duplicateIndex) + ")";
-            resultPlaces.push_back(newPlaceName);
+            duplicatedPlaceName = originalPlace + "(" + to_string(duplicateIndex) + ")";
+            resultPlaces.push_back(duplicatedPlaceName);
 
-            numberRowException = newPlaceName;
+            newMarking.push_back(transfer_connect);
             break;
         }
     }
 
-    // Kopiowanie i duplikowanie tranzycji
-    vector<int> newColumn(numPlaces + 1, 0);
+    // ---- Kopiowanie kolumny ----
+    vector<int> copyColumn(matrix.size(), 0);
     for (size_t p = 0; p < numPlaces; ++p) {
-        newColumn[p] = matrix[p][transitionIndex];
+        copyColumn[p] = matrix[p][transitionIndex];
     }
-    matrix.push_back(newColumn);
 
+    // ---- Znalezienie liczby ujemnej i przeniesienie jej ----
+    for (size_t p = 0; p < copyColumn.size(); ++p) {
+        if (copyColumn[p] < 0) {
+            int negativeValue = copyColumn[p];
+            copyColumn[p] = 0;  // Wyzerowanie wartości w kolumnie kopii
+            matrix.back()[p] = negativeValue;  // Wpisanie ujemnej wartości do nowego wiersza
+            break;
+        }
+    }
+
+    // ---- Dodanie nowej kolumny do macierzy wejściowej ----
+    for (size_t p = 0; p < matrix.size(); ++p) {
+        matrix[p].push_back(copyColumn[p]);
+    }
+
+    // ---- Tworzenie nazwy nowego przejścia ----
     string originalTransition = "t" + to_string(transitionIndex + 1);
     int duplicateTransitionIndex = ++duplicateCounts[originalTransition];
-    string newTransitionName = originalTransition + "(" + to_string(duplicateTransitionIndex) + ")";
-    resultTransitions.push_back(newTransitionName);
+    duplicatedTransitionName = originalTransition + "(" + to_string(duplicateTransitionIndex) + ")";
+    resultTransitions.push_back(duplicatedTransitionName);
 
-    visitedTransitions.push_back(false);  // Nowa kolumna jeszcze nie została odwiedzona
-
-    numberColumnException = newTransitionName;
+    // ---- Aktualizacja visitedTransitions ----
+    visitedTransitions.push_back(false);
 }
+
+
+
+
+
+
 
 PetriNet loadFromJSON(const string& filename) {
     ifstream file(filename);      // Otwiera plik JSON do odczytu.
@@ -118,19 +143,6 @@ void saveToJSON(const string& filename, const Matrix& matrix, const vector<strin
     file << j.dump(4);            // Zapisuje dane w formacie JSON z wcięciem 4 spacji.
 }
 
-
-// Dodanie nowych przejść do listy przejść
-void addTransition(vector<string>& resultTransitions, const string& transitionName) {
-    if (!numberColumnException.empty()) {
-        resultTransitions.push_back(numberColumnException);
-        numberColumnException.clear();
-    } else {
-        if (find(resultTransitions.begin(), resultTransitions.end(), transitionName) == resultTransitions.end()) {
-            resultTransitions.push_back(transitionName);
-        }
-    }
-}
-
 // Sprawdzenie czy moze zostac uruchomiona tranzycja
 bool isTransitionEnabled(const Marking& marking, const vector<int>& transition) {
     for (size_t i = 0; i < transition.size(); ++i) { // Iteruje przez wszystkie indeksy w transition.
@@ -155,16 +167,29 @@ Marking fireTransition(const Marking& marking, const vector<int>& transition) {
     return newMarking; // Zwróć poprawnie zaktualizowane oznakowanie
 }
 
-
-// Dodanie nowych miejsc do listy miejsc
 void addPlace(vector<string>& resultPlaces, const string& placeName) {
-    if (!numberRowException.empty()) {
-        resultPlaces.push_back(numberRowException);
-        numberRowException.clear();
-    } else {
-        if (find(resultPlaces.begin(), resultPlaces.end(), placeName) == resultPlaces.end()) {
-            resultPlaces.push_back(placeName);
+    if (!duplicatedPlaceName.empty()) {
+        if (find(resultPlaces.begin(), resultPlaces.end(), duplicatedPlaceName) == resultPlaces.end()) {
+            resultPlaces.push_back(duplicatedPlaceName);
         }
+        duplicatedPlaceName.clear();  // Wyczyszczenie po dodaniu
+    }
+
+    if (find(resultPlaces.begin(), resultPlaces.end(), placeName) == resultPlaces.end()) {
+        resultPlaces.push_back(placeName);
+    }
+}
+
+void addTransition(vector<string>& resultTransitions, const string& transitionName) {
+    if (!duplicatedTransitionName.empty()) {
+        if (find(resultTransitions.begin(), resultTransitions.end(), duplicatedTransitionName) == resultTransitions.end()) {
+            resultTransitions.push_back(duplicatedTransitionName);
+        }
+        duplicatedTransitionName.clear();  // Wyczyszczenie po dodaniu
+    }
+
+    if (find(resultTransitions.begin(), resultTransitions.end(), transitionName) == resultTransitions.end()) {
+        resultTransitions.push_back(transitionName);
     }
 }
 
